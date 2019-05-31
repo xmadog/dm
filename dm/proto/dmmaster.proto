@@ -1,0 +1,291 @@
+syntax = "proto3";
+
+package pb;
+
+import "dmworker.proto"; // refine if needed
+
+
+service Master {
+    rpc StartTask (StartTaskRequest) returns (StartTaskResponse) {}
+    rpc OperateTask (OperateTaskRequest) returns (OperateTaskResponse) {}
+    rpc UpdateTask (UpdateTaskRequest) returns (UpdateTaskResponse) {}
+
+    rpc QueryStatus (QueryStatusListRequest) returns (QueryStatusListResponse) {}
+    rpc QueryError (QueryErrorListRequest) returns (QueryErrorListResponse) {}
+
+    // show un-resolved DDL locks
+    rpc ShowDDLLocks (ShowDDLLocksRequest) returns (ShowDDLLocksResponse) {}
+    // used by dmctl to manually unlock DDL lock
+    rpc UnlockDDLLock (UnlockDDLLockRequest) returns (UnlockDDLLockResponse) {}
+
+    rpc UpdateMasterConfig (UpdateMasterConfigRequest) returns (UpdateMasterConfigResponse) {}
+
+    rpc UpdateWorkerRelayConfig(UpdateWorkerRelayConfigRequest) returns (CommonWorkerResponse) {}
+
+    // BreakDDLLock request some dm-workers to break a DDL lock
+    // including remove DDLLockInfo and/or execute/skip DDL
+    rpc BreakWorkerDDLLock (BreakWorkerDDLLockRequest) returns (BreakWorkerDDLLockResponse) {}
+
+    rpc HandleSQLs (HandleSQLsRequest) returns (HandleSQLsResponse) {}
+
+    // SwitchWorkerRelayMaster requests some dm-workers to switch relay unit's master server
+    rpc SwitchWorkerRelayMaster(SwitchWorkerRelayMasterRequest) returns (SwitchWorkerRelayMasterResponse) {}
+
+    // OperateWorkerRelayTask requests some dm-workers to operate relay unit
+    rpc OperateWorkerRelayTask (OperateWorkerRelayRequest) returns (OperateWorkerRelayResponse) {}
+
+    // PurgeWorkerRelay purges relay log files for some dm-workers
+    rpc PurgeWorkerRelay(PurgeWorkerRelayRequest) returns (PurgeWorkerRelayResponse) {}
+
+    // used by dmctl, to force refresh the task -> workers mapper
+    // it should be used rarely only when task -> workers mapper corrupted
+    rpc RefreshWorkerTasks (RefreshWorkerTasksRequest) returns (RefreshWorkerTasksResponse) {}
+
+    // MigrateRelay request migrate old dm-woker to a new one. 
+    rpc MigrateWorkerRelay(MigrateWorkerRelayRequest) returns (CommonWorkerResponse) {}
+
+    // CheckTask checks legality of task configuration
+    rpc CheckTask(CheckTaskRequest) returns (CheckTaskResponse) {}
+}
+
+message MigrateWorkerRelayRequest {
+    string BinlogName = 1;
+    uint32 BinlogPos = 2;
+    string worker = 3;
+}
+
+message UpdateWorkerRelayConfigRequest {
+    string config = 1;
+    string worker = 2;
+}
+
+message StartTaskRequest {
+    string task = 1; // task's configuration, yaml format
+    repeated string workers = 2; // workers need to do start task, empty for all matched workers in deployment
+}
+
+message StartTaskResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated CommonWorkerResponse workers = 3;
+}
+
+message UpdateMasterConfigRequest {
+    string config = 1;
+}
+
+message UpdateMasterConfigResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated QueryStatusResponse workers = 3;
+}
+
+message OperateTaskRequest {
+    TaskOp op = 1; // Stop / Pause / Resume
+    string name = 2; // task's name
+    repeated string workers = 3; // workers need to do operation, empty for matched workers in processing the task
+}
+
+message OperateTaskResponse {
+    TaskOp op = 1;
+    bool result = 2;
+    string msg = 3;
+    repeated OperateSubTaskResponse workers = 4;
+}
+
+
+// UpdateTaskRequest used to update task after it has beed started
+// task: task's configuration, yaml format
+//       now, only support to update config for routes, filters, column-mappings, black-white-list
+//       support update partial config for syncer, loader, etc later
+// workers need to do update, empty for all workers in processing the task
+message UpdateTaskRequest {
+    string task = 1;
+    repeated string workers = 2;
+}
+
+message UpdateTaskResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated CommonWorkerResponse workers = 3;
+}
+
+
+message QueryStatusListRequest {
+    string name = 1; // task's name, empty for all tasks
+    repeated string workers = 2; // workers need to query, empty for all workers
+}
+
+message QueryStatusListResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated QueryStatusResponse workers = 3;
+}
+
+message QueryErrorListRequest {
+    string name = 1;             // task's name, empty for all tasks
+    repeated string workers = 2; // workers need to query, empty for all workers
+}
+
+message QueryErrorListResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated QueryErrorResponse workers = 3;
+}
+
+// ShowDDLLocksRequest used to query DDL locks which are un-resolved
+// task: task's name, empty for all tasks
+// workers: worker need to query, empty for all workers
+//          any DDL lock in which the worker is synced or unsynced will return
+// if specify task and workers both, and workers not doing the task , it will return empty DDL locks
+message ShowDDLLocksRequest {
+    string task = 1;
+    repeated string workers = 2; // workers need to query, empty for all workers
+}
+
+// DDLLock represents a DDL lock info (I known the name confused with DDLLockInfo, any suggestion?)
+// it been sent from dm-master to dmctl
+// ID: DDL lock generated ID
+// task: lock's corresponding task name
+// owner: lock's owner, a dm-worker
+// DDL: DDL statement
+// synced: already synced dm-workers
+// unsynced: pending to sync dm-workers
+message DDLLock {
+    string ID = 1;
+    string task = 2;
+    string owner = 3;
+    repeated string DDLs = 4;
+    repeated string synced = 5;
+    repeated string unsynced = 6;
+}
+
+message ShowDDLLocksResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated DDLLock locks = 3; // all un-resolved DDL locks
+}
+
+// UnlockDDLLockRequest used to unlock (resolve) DDL lock manually
+// ID: DDL lock ID
+// replaceOwner: dm-worker used to replace the original DDL lock's owner
+// workers: dm-workers need to execute / skip DDL, empty for all dm-workers
+//   replaceOwner in or not in workers are both fine
+// forceRemove: force to remove the DDL lock even unlock fail
+message UnlockDDLLockRequest {
+    string ID = 1;
+    string replaceOwner = 2;
+    repeated string workers = 3;
+    bool forceRemove = 4;
+}
+
+message UnlockDDLLockResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated CommonWorkerResponse workers = 3;
+}
+
+// BreakWorkerDDLLockRequest represents a request for some dm-workers to force to break the DDL lock
+// workers: dm-workers need to break DDL lock
+// task: sub task's name
+// removeLockID: DDLLockInfo's ID which need to remove
+// execDDL: execute DDL which is blocking
+// skipDDL: skip DDL which is blocking
+//   execDDL and skipDDL can not specify both at the same time, but can specify neither
+message BreakWorkerDDLLockRequest {
+    repeated string workers = 1;
+    string task = 2;
+    string removeLockID = 3;
+    bool execDDL = 4;
+    bool skipDDL = 5;
+}
+
+message BreakWorkerDDLLockResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated CommonWorkerResponse workers = 3;
+}
+
+// SwitchWorkerRelayMasterRequest represents a request for some dm-workers to switch relay unit's master server
+// workers: relay unit in these dm-workers need to switch master server
+message SwitchWorkerRelayMasterRequest {
+    repeated string workers = 1;
+}
+
+message SwitchWorkerRelayMasterResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated CommonWorkerResponse workers = 3;
+}
+
+// OperateWorkerRelayRequest represents a request for some dm-workers to operate relay unit
+message OperateWorkerRelayRequest {
+    RelayOp op = 1; // Stop / Pause / Resume
+    repeated string workers = 2;
+}
+
+message OperateWorkerRelayResponse {
+    RelayOp op = 1;
+    bool result = 2;
+    string msg = 3;
+    repeated OperateRelayResponse workers = 4;
+}
+
+
+message RefreshWorkerTasksRequest {
+}
+
+message RefreshWorkerTasksMsg {
+    string worker = 1;
+    string msg = 2;
+}
+
+message RefreshWorkerTasksResponse {
+    bool result = 1;
+    repeated RefreshWorkerTasksMsg workers = 2;
+}
+
+message HandleSQLsRequest {
+    string name = 1; // sub task's name
+    SQLOp op = 2; // operation type
+    repeated string args = 3; // args for operation
+    string binlogPos = 4; // binlog-pos (that's file:pos format)
+    string worker = 5; // worker
+    string sqlPattern = 6; // sql-pattern (for regexp, starts with ~)
+    bool sharding = 7; // whether are handing sharding DDL, which will only take effect on DDL lock's owner
+}
+
+message HandleSQLsResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated CommonWorkerResponse workers = 3;
+}
+
+// PurgeWorkerRelayRequest represents a request to purge relay log files for some dm-workers
+// workers: dm-workers need to purge relay log files
+// inactive: whether purge inactive relay log files
+// time: whether purge relay log files before this time, the number of seconds elapsed since January 1, 1970 UTC
+// filename: whether purge relay log files before this filename
+// subDir: specify relay sub directory for @filename
+message PurgeWorkerRelayRequest {
+    repeated string workers = 1;
+    bool inactive = 2;
+    int64 time = 3;
+    string filename = 4;
+    string subDir = 5;
+}
+
+message PurgeWorkerRelayResponse {
+    bool result = 1;
+    string msg = 2;
+    repeated CommonWorkerResponse workers = 3;
+}
+
+message CheckTaskRequest {
+    string task = 1; // task's configuration, yaml format
+}
+
+message CheckTaskResponse {
+    bool result = 1;
+    string msg = 2;
+}

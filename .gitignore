@@ -1,0 +1,12 @@
+bin
+*/*.iml
+*/.idea
+deps.sh
+syncer.meta
+dumped_data/*
+dm-worker.log*
+dm-master.log*
+dmctl.log
+relay_log/*
+vendor
+*/*.DS_Store

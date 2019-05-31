@@ -1,0 +1,460 @@
+syntax = "proto3";
+
+package pb;
+
+
+service Worker {
+    rpc StartSubTask (StartSubTaskRequest) returns (OperateSubTaskResponse) {}
+    rpc OperateSubTask (OperateSubTaskRequest) returns (OperateSubTaskResponse) {}
+    rpc UpdateSubTask (UpdateSubTaskRequest) returns (OperateSubTaskResponse) {}
+
+    rpc QueryStatus (QueryStatusRequest) returns (QueryStatusResponse) {}
+    rpc QueryError (QueryErrorRequest) returns (QueryErrorResponse) {}
+    rpc QueryTaskOperation(QueryTaskOperationRequest) returns (QueryTaskOperationResponse) {}
+
+    rpc HandleSQLs (HandleSubTaskSQLsRequest) returns (CommonWorkerResponse) {}
+    // FetchDDLInfo fetches DDL info from dm-worker by dm-master
+    // and sends the relevant DDL lock info back to dm-worker
+    // NOTE: split to two RPCs if needed
+    rpc FetchDDLInfo (stream DDLLockInfo) returns (stream DDLInfo) {}
+
+    // ExecuteDDL request a dm-worker to execute or ignore (skip) a DDL
+    rpc ExecuteDDL (ExecDDLRequest) returns (CommonWorkerResponse) {}
+
+    // BreakDDLLock request a dm-worker to break a DDL lock
+    // including remove DDLLockInfo and/or execute/skip DDL
+    rpc BreakDDLLock (BreakDDLLockRequest) returns (CommonWorkerResponse) {}
+
+    // SwitchRelayMaster request a dm-worker's relay unit switching to another master server
+    rpc SwitchRelayMaster (SwitchRelayMasterRequest) returns (CommonWorkerResponse) {}
+
+    // OperateRelay operates relay unit
+    // differ from SwitchRelayMaster which may add more args in the future
+    rpc OperateRelay (OperateRelayRequest) returns (OperateRelayResponse) {}
+
+    // PurgeRelay purges relay log files for this dm-worker
+    rpc PurgeRelay (PurgeRelayRequest) returns (CommonWorkerResponse) {}
+
+    rpc UpdateRelayConfig (UpdateRelayRequest) returns (CommonWorkerResponse) {}
+
+    rpc QueryWorkerConfig (QueryWorkerConfigRequest) returns (QueryWorkerConfigResponse) {}
+
+    rpc MigrateRelay(MigrateRelayRequest) returns (CommonWorkerResponse) {}
+}
+
+message StartSubTaskRequest {
+    string task = 1; // (sub) task's configuration
+}
+
+enum TaskOp {
+    InvalidOp = 0;  // placeholder
+    Stop = 1;
+    Pause = 2;
+    Resume = 3;
+    Start = 4;
+    Update = 5;
+}
+
+message UpdateRelayRequest {
+    string content = 1;
+}
+
+message MigrateRelayRequest {
+    string BinlogName = 1;
+    uint32 BinlogPos = 2;
+}
+
+message OperateSubTaskRequest {
+    TaskOp op = 1;
+    string name = 2; // sub task's name
+}
+
+message OperateSubTaskResponse {
+    CommonWorkerResponse meta = 1;
+    TaskOp op = 2;
+    int64 logID = 3;
+}
+
+message QueryTaskOperationRequest {
+    string name = 1; // sub task's name
+	int64 logID = 2; // operation log ID
+}
+
+message QueryTaskOperationResponse {
+    CommonWorkerResponse meta = 1;
+    TaskLog log = 2; // sub task's operation log
+}
+
+message UpdateSubTaskRequest {
+    string task = 1; // (sub) task's new configuration
+}
+
+message QueryStatusRequest {
+    string name = 1; // sub task's name, empty for all sub tasks
+}
+
+message QueryErrorRequest {
+    string name = 1; // sub task's name, empty for all sub tasks
+}
+
+enum SQLOp {
+    SKIP = 0; // skip the SQL
+    REPLACE = 1; // replace the SQL with a specified SQL
+    INJECT = 2; // inject the SQL to syncer as binlog event
+}
+
+// NOTE: we can extract some common(optional) arguments from `args`, like `meta`
+message HandleSubTaskSQLsRequest {
+    string name = 1; // sub task's name
+    SQLOp op = 2; // operation type
+    repeated string args = 3; // args for operation
+    string binlogPos = 4; // binlog-pos (that's file:pos format)
+    string sqlPattern = 5; // sql-pattern (for regexp, starts with ~)
+}
+
+message CommonWorkerResponse {
+    bool result = 1;
+    string worker = 2; // worker name, set by dm-master
+    string msg = 3; // when result is true, msg is empty
+}
+
+// QueryStatusResponse represents status response for query on a dm-worker
+// status: dm-worker's current sub tasks' status
+message QueryStatusResponse {
+    bool result = 1;
+    string worker = 2; // worker name, set by dm-master
+    string msg = 3;
+    repeated SubTaskStatus subTaskStatus = 4;
+    RelayStatus relayStatus = 5;
+}
+
+// QueryErrorResponse represents response for query on a dm-worker
+message QueryErrorResponse {
+    bool result = 1;
+    string worker = 2; // worker name, set by dm-master
+    string msg = 3;
+    repeated SubTaskError subTaskError = 4;
+    RelayError RelayError = 5;
+}
+
+// Stage represents current stage for a (sub) task
+// a (sub) task should be always in one stage of the following stages
+// (sub) task can transfer from on stage to some special other stages
+// New: initial stage when a sub task is created
+//      can not transfered from other stages
+//      transfer to Running when initialize with no error
+// Running: indicates the sub task is processing
+//          transfered from New when created successfully
+//          transfered from Paused when resuming is requested
+//          transfer to Paused when error occured or requested from external
+//          transfer to Stopped when requested from external
+//          transfer to Finished when sub task processing completed (no Syncer used)
+// Paused: indicates the processing is paused, and can be resume from external request
+//         transfered from Running when error occured or requested from external
+//         transfer to Running when resuming is requested from external
+//         transfer to Stopped when requested from external
+// Stopped: indicates the processing is stopped, and can not be resume (or re-run) again
+//          transfered from Running / Paused when requested from external
+//          can not transfer to any stages
+// Finished: indicates the processing is finished, and no need to re-run
+//           transfered from Running when processing completed
+//           should not transfer to any stages
+enum Stage {
+    InvalidStage = 0; // placeholder
+    New = 1;
+    Running = 2;
+    Paused = 3;
+    Stopped = 4;
+    Finished = 5;
+}
+
+// CheckStatus represents status for check unit
+// adds fields later
+message CheckStatus {
+    bool  passed = 1;
+    int32 total = 2;
+    int32 successful = 3;
+    int32 failed = 4;
+    int32 warning = 5;
+
+    bytes detail = 6;
+}
+
+// DumpStatus represents status for dump unit
+// add fields later
+message DumpStatus {
+}
+
+// LoadStatus represents status for load unit
+message LoadStatus {
+    int64 finishedBytes = 1;
+    int64 totalBytes = 2;
+    string progress = 3;
+    string metaBinlog = 4;
+}
+
+// ShardingGroup represents a DDL sharding group, this is used by SyncStatus, and is differ from ShardingGroup in syncer pkg
+// target: target table name
+// DDL: in syncing DDL
+// firstPos: first DDL binlog pos for this group
+// synced: synced source tables
+// unsynced: unsynced source tables
+message ShardingGroup {
+    string target = 1;
+    repeated string DDLs = 2;
+    string firstPos = 3;
+    repeated string synced = 4;
+    repeated string unsynced = 5;
+}
+
+// SyncStatus represents status for sync unit
+message SyncStatus {
+    int64 totalEvents = 1;
+    int64 totalTps = 2;
+    int64 recentTps = 3;
+    string masterBinlog = 4;
+    string masterBinlogGtid = 5;
+    string syncerBinlog = 6;
+    string syncerBinlogGtid = 7;
+    repeated string blockingDDLs = 8; // sharding DDL which current is blocking
+    repeated ShardingGroup unresolvedGroups = 9; // sharding groups which current are un-resolved
+    bool synced = 10;  // whether sync is catched-up in this moment
+}
+
+// RelayStatus represents status for relay unit.
+message RelayStatus {
+    string masterBinlog = 1;
+    string masterBinlogGtid = 2;
+    string relaySubDir = 3;
+    string relayBinlog = 4;
+    string relayBinlogGtid = 5;
+    bool relayCatchUpMaster = 6;
+    Stage stage = 7;
+    ProcessResult result = 8;
+}
+
+// SubTaskStatus represents status for a sub task
+// name: sub task'name, when starting a sub task the name should be unique
+// stage: sub task's current stage
+// unit: sub task's current dm unit's UnitType
+// result: current unit's process result, when the stage is Running, no result
+// unresolvedDDLLockID: un-resolved sharding DDL lock ID (ref DDLLockInfo)
+//                      if needed, we can put this to SyncStatus
+// status: current unit's statistics
+//         for Load, includes total bytes, progress, etc.
+//         for Sync, includes TPS, binlog meta, etc.
+message SubTaskStatus {
+    string name = 1;
+    Stage stage = 2;
+    UnitType unit = 3;
+    ProcessResult result = 4;
+    string unresolvedDDLLockID = 5;
+    oneof status {
+        string msg = 6; // message when error occurred
+        CheckStatus check = 7;
+        DumpStatus dump = 8;
+        LoadStatus load = 9;
+        SyncStatus sync = 10;
+    }
+}
+
+// SubTaskStatusList used for internal jsonpb marshal
+message SubTaskStatusList {
+    repeated SubTaskStatus status = 1;
+}
+
+// CheckError represents error for check unit
+// adds fields later
+message CheckError {
+    string msg = 1;
+}
+
+// DumpError represents error for dump unit
+// add fields later
+message DumpError {
+    string msg = 1;
+}
+
+// LoadError represents error for load unit
+message LoadError {
+    string msg = 1;
+}
+
+// SyncSQLError represents a sql error in sync unit
+message SyncSQLError {
+    string msg = 1;
+    string failedBinlogPosition = 2;
+    string errorSQL = 3;
+}
+
+// SyncError represents error list for sync unit
+message SyncError {
+    repeated SyncSQLError errors = 1;
+}
+
+// RelayError represents error for relay unit.
+message RelayError {
+    string msg = 1;
+}
+
+// SubTaskError represents error for a sub task during running
+// name: sub task'name, when starting a sub task the name should be unique
+// stage: sub task's current stage
+// unit: sub task's current dm unit's UnitType
+// error: current unit's error information
+//         for Sync, includes failed sql, failed sql pos in binlog, etc.
+message SubTaskError {
+    string name = 1;
+    Stage stage = 2;
+    UnitType unit = 3;
+    oneof error {
+        string msg = 4; // message when error occurred
+        CheckError check = 5;
+        DumpError dump = 6;
+        LoadError load = 7;
+        SyncError sync = 8;
+    }
+}
+
+// SubTaskErrorList used for internal jsonpb marshal
+message SubTaskErrorList {
+    repeated SubTaskError error = 1;
+}
+
+// UnitType represents the dm unit's type
+enum UnitType {
+    InvalidUnit = 0; // placeholder
+    Check = 1;
+    Dump = 2;
+    Load = 3;
+    Sync = 4;
+    Relay = 100; // relay is a special unit
+}
+
+// ProcessResult represents results produced by a dm unit
+// isCanceled: indicates whether the process is canceled from external
+//             when Stop or Pause is requested from external, isCanceled will be true
+// errors: includes all (potential) errors occured when processing
+message ProcessResult {
+    bool isCanceled = 1;
+    repeated ProcessError errors = 2;
+    bytes detail = 3;
+}
+
+// ErrorType represents type of error produced by a dm unit
+// NOTE: add new if needed
+enum ErrorType {
+    UnknownError = 0;
+    ExecSQL = 1;
+    CheckFailed = 2;
+}
+
+// ProcessError represents error produced by a dm unit
+// NOTE: refine later, like add error scope field
+message ProcessError {
+    ErrorType Type = 1;
+    string msg = 2;
+}
+
+// DDLInfo represents a occurred DDL in a sub task
+// it been sent from dm-worker to dm-master
+// dm-master uses it to contruct a DDL lock and do syncing with other dm-workers
+// add more fields if needed
+message DDLInfo {
+    string task = 1; // sub task's name
+    string schema = 2; // DDL's schema
+    string table = 3; // DDL's table
+    repeated string DDLs = 4; // DDL statement
+}
+
+// DDLLockInfo represents a DDL lock
+// it been sent from dm-master to dm-worker
+// add more fields if needed
+message DDLLockInfo {
+    string task = 1; // sub task's name
+    string ID = 2; // DDL lock ID
+}
+
+// ExecDDLRequest represents a request for a dm-worker to execute (or ignore) a DDL
+message ExecDDLRequest {
+    string task = 1; // sub task's name
+    string lockID = 2; // DDL lock ID
+    bool exec = 3; // true for execute, false for ignore (skip)
+    string traceGID = 4; // trace group ID
+}
+
+// BreakDDLLockRequest represents a request for a dm-worker to force to break the DDL lock
+// task: sub task's name
+// removeLockID: DDLLockInfo's ID which need to remove
+// execDDL: execute DDL which is blocking
+// skipDDL: skip DDL which is blocking
+// execDDL and skipDDL can not specify both at the same time, but can specify neither
+message BreakDDLLockRequest {
+    string task = 1;
+    string removeLockID = 2;
+    bool execDDL = 3;
+    bool skipDDL = 4;
+}
+
+// SwitchRelayMasterRequest represents a request for switching a dm-worker's relay unit to another master server
+message SwitchRelayMasterRequest {
+}
+
+// RelayOp differs from TaskOp
+enum RelayOp {
+    InvalidRelayOp = 0;  // placeholder
+    StopRelay = 1;
+    PauseRelay = 2;
+    ResumeRelay = 3;
+}
+
+// OperateRelayRequest represents a request for operate relay unit
+message OperateRelayRequest {
+    RelayOp op = 1;
+}
+
+message OperateRelayResponse {
+    RelayOp op = 1;
+    bool result = 2;
+    string worker = 3; // worker name, set by dm-master
+    string msg = 4;
+}
+
+// PurgeRelayRequest represents a request to purge relay log files for this dm-worker
+// inactive: whether purge inactive relay log files
+// time: whether purge relay log files before this time, the number of seconds elapsed since January 1, 1970 UTC
+// filename: whether purge relay log files before this filename
+// subDir: specify relay sub directory for @filename
+message PurgeRelayRequest {
+    bool inactive = 1;
+    int64 time = 2;
+    string filename = 3;
+    string subDir = 4;
+}
+
+message QueryWorkerConfigRequest {
+}
+
+message QueryWorkerConfigResponse {
+    bool result = 1;
+    string worker = 2; // worker name, set by dm-master
+    string msg = 3; // when result is true, msg is empty
+    string sourceID = 4; // source ID
+    string content = 5; // marshaled config content
+}
+
+message TaskMeta {
+    TaskOp op = 1;
+    Stage stage = 2; // the stage of sub-task after we apply some operations
+    string name = 3; // sub task's name
+    bytes task = 4; // (sub) task's configuration
+}
+
+message TaskLog {
+    int64 id = 1;
+    TaskMeta task = 2;
+    int64 ts = 3;
+    // true means this log is applied successfully
+    bool success = 4;
+    string message = 5;
+}
